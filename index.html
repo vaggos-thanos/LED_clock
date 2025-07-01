@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>5x7 Font Editor</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background: #111;
+      color: #eee;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, 40px);
+      grid-template-rows: repeat(7, 40px);
+      gap: 4px;
+      margin: 20px auto;
+      width: max-content;
+    }
+    .cell {
+      width: 40px;
+      height: 40px;
+      background: #222;
+      border: 1px solid #555;
+      cursor: pointer;
+    }
+    .cell.on {
+      background: #0f0;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+    }
+    textarea {
+      margin-top: 20px;
+      width: 300px;
+      height: 100px;
+      font-family: monospace;
+      font-size: 16px;
+      background: #222;
+      color: #0f0;
+      border: 1px solid #555;
+      resize: none;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>5x7 Font Editor</h1>
+  <div class="grid" id="grid"></div>
+  <button onclick="generate()">Generate C Code</button>
+  <br/>
+    <textarea id="output" placeholder="C hex array here" oninput="parseInput()"></textarea>
+    <br/>
+    <button onclick="parseInput()">Load from C Code</button>
+
+  <script>
+    const grid = document.getElementById('grid');
+    const output = document.getElementById('output');
+    const rows = 8;
+    const cols = 5;
+    const cells = [];
+
+    // Create grid
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const cell = document.createElement('div');
+        cell.classList.add('cell');
+        cell.dataset.x = x;
+        cell.dataset.y = y;
+        cell.onclick = () => cell.classList.toggle('on');
+        grid.appendChild(cell);
+        cells.push(cell);
+      }
+    }
+
+    // Generate C hex code
+    function generate() {
+      let bytes = [];
+
+      for (let x = 0; x < cols; x++) {
+        let byte = 0;
+        for (let y = 0; y < rows; y++) {
+          const index = y * cols + x;
+          if (cells[index].classList.contains('on')) {
+            byte |= (1 << y);
+          }
+        }
+        bytes.push('0x' + byte.toString(16).padStart(2, '0'));
+      }
+
+      output.value = '{' + bytes.join(', ') + '}';
+      navigator.clipboard.writeText(output.value)
+        .catch(err => console.error('Failed to copy text: ', err));
+    }
+    
+    function parseInput() {
+        const input = output.value.trim();
+        if (!input.startsWith('{') || !input.endsWith('}')) {
+            alert('Invalid format. Expected format: {0x00, 0x00, ...}');
+            return;
+        }
+
+        const hexValues = input.slice(1, -1).split(',').map(val => parseInt(val.trim(), 16));
+        if (hexValues.length !== cols) {
+            alert(`Invalid number of columns. Expected ${cols} values.`);
+            return;
+        }
+
+        for (let x = 0; x < cols; x++) {
+            const byte = hexValues[x];
+            for (let y = 0; y < rows; y++) {
+            const index = y * cols + x;
+            if (byte & (1 << y)) {
+                cells[index].classList.add('on');
+            } else {
+                cells[index].classList.remove('on');
+            }
+            }
+        }
+    }
+  </script>
+
+</body>
+</html>
