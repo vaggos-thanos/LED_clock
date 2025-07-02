@@ -1,0 +1,13 @@
+sockets:
+
+
+data =>
+
+{
+    {
+        "status": "success",
+        "type": "event1",
+        "error": null,
+        "message": "Data received successfully",
+    }
+}
