@@ -8,6 +8,11 @@ const mysql = require('mysql2');
 
 const db_handler = require('./dbManager.js');
 const functions = require('./functions.js');
+const { DataSource } = require('typeorm');
+const { ExpressRateLimitTypeOrmStore } = require('typeorm-rate-limit-store');
+const rateLimit = require('express-rate-limit');
+const RateLimitEntity = require('../entities/RateLimit.js'); // Adjust the path to your RateLimit entity
+
 
 class API {
     constructor(url) {
@@ -34,10 +39,6 @@ class API {
     }
 
     async setupRoutes() {
-        this.app.get('/', (req, res) => {
-            res.send('<h1>Hello world</h1>');
-        });
-
         this.app.get('/api', (req, res) => {
             res.send('<h1>Hello papia</h1>');
         });
@@ -93,16 +94,38 @@ class API {
             try {
                 this.url = await this.functions.parseURL(this.url);
 
-                // await this.dbManager.login(
-                //     process.env.DB_HOST, 
-                //     process.env.DB_USER, 
-                //     process.env.DB_PASSWORD, 
-                //     process.env.DB_DATA
-                // );
+                await this.dbManager.login(
+                    process.env.DB_HOST,
+                    process.env.DB_USER,
+                    process.env.DB_PASS,
+                    process.env.DB_DATA
+                );
+
+                const AppDataSource = new DataSource({
+                    type: "mysql", // works with MariaDB too
+                    host: process.env.DB_HOST,
+                    port: 3306,
+                    username: process.env.DB_USER,
+                    password: process.env.DB_PASS,
+                    database: process.env.DB_DATA,
+                    synchronize: true,
+                    entities: [RateLimitEntity], // Adjust the path to your entities
+                });
+
+                await AppDataSource.initialize();
+
+                this.limiter = rateLimit({
+                    windowMs: 2 * 60 * 1000, // 15 minutes
+                    max: 200, // Limit each IP to 5 requests per windowMs
+                    standardHeaders: true,
+                    legacyHeaders: false,
+                    store: new ExpressRateLimitTypeOrmStore(AppDataSource.getRepository(RateLimitEntity), "users_"),
+                });
+
+                this.app.use(this.limiter);
 
                 await this.setupRoutes();
                 await this.setupSocket();
-
 
                 await this.server.listen(process.env.PORT || 3000, () => {
                     this.functions.log(`API is running at ${this.url}`);

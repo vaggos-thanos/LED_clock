@@ -26,7 +26,7 @@ class db_handler {
         log('[+] Checking SQL file...', this.toggle, 'green');
         const sqlPath = path.join(__dirname, '../../api.sql');
         const sqlContent = fs.readFileSync(sqlPath, 'utf8');
-        const tables = sqlContent.split(';').filter(statement => statement.includes('create table'));
+        const tables = sqlContent.split(';').filter(statement => statement.includes('CREATE TABLE'));
     
         const apiJSON = path.join(__dirname, '../../apiDB.json');
         if (fs.existsSync(apiJSON)) {
@@ -36,7 +36,7 @@ class db_handler {
             
             let newJson = [];
             for (const table of tables) {
-                const tableName = table.split('(')[0].split(' ')[2].trim();
+                const tableName = table.split('(')[0].split(' ')[5].trim();
                 let sqlInsert = table.trim();
                 sqlInsert = sqlInsert.replace(/(\r\n|\n|\r)/gm, ' ');
                 newJson.push({
@@ -61,7 +61,7 @@ class db_handler {
     async login(host, username, password, database) {
         await this.setStatus(false, "Initialazing", "none")
         await this.checkSQLFile();
-        const apiJSON = import(path.join(__dirname, '../../apiDB.json'));
+        const apiJSON = require(await path.join(await path.resolve(__dirname, '../../'), 'apiDB.json'));
 
         let while_v = true
 
