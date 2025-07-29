@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket.IO Tester</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #log { white-space: pre-wrap; background: #eee; padding: 10px; height: 200px; overflow-y: scroll; }
+    textarea { width: 100%; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>🔌 Socket.IO WebSocket Tester</h1>
+
+  <label for="wsUrl">Server URL:</label>
+  <input type="text" id="wsUrl" value="http://localhost:3000">
+  <button onclick="connect()">Connect</button>
+  <button onclick="disconnect()">Disconnect</button>
+
+  <h3>Message to Send:</h3>
+  <textarea id="msgToSend" rows="3">{"status":"success", "type":"debug","message":"Hello from client!"}</textarea>
+  <button onclick="sendMessage()">Send</button>
+
+  <h3>📋 Log</h3>
+  <div id="log"></div>
+
+  <script>
+    let socket = null;
+
+    function log(msg) {
+      const logBox = document.getElementById('log');
+      logBox.textContent += msg + '\n';
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function connect() {
+      const url = document.getElementById('wsUrl').value;
+      socket = io(url);
+
+      socket.on('connect', () => log("✅ Connected: " + socket.id));
+      socket.on('disconnect', () => log("❌ Disconnected"));
+      socket.on('message', data => log("📩 Received: " + JSON.stringify(data)));
+      socket.on('connect_error', err => log("⚠️ Connect error: " + err.message));
+    }
+
+    function sendMessage() {
+      const msg = document.getElementById('msgToSend').value;
+      try {
+        const data = JSON.parse(msg);
+        socket.emit("message", data);
+        log("📤 Sent: " + JSON.stringify(data));
+      } catch (e) {
+        log("⚠️ Invalid JSON");
+      }
+    }
+
+    function disconnect() {
+      if (socket) socket.disconnect();
+    }
+  </script>
+</body>
+</html>
+

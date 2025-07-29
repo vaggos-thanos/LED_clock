@@ -16,6 +16,8 @@
 // OTA
 #include <WebServer.h>
 #include <Update.h>
+// Server Index Page
+#include "html.h"
 
 // WS
 #include <WebSocketsClient_Generic.h>
@@ -221,45 +223,10 @@ void loadSettings() {
 
 // OTA
 WebServer server(80);
-/*
- * Server Index Page
- */
-const char* serverIndex = 
-  "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-  "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-    "<input type='file' name='update'>"
-          "<input type='submit' value='Update'>"
-      "</form>"
-  "<div id='prg'>progress: 0%</div>"
-  "<script>"
-    "$('form').submit(function(e){"
-    "e.preventDefault();"
-    "var form = $('#upload_form')[0];"
-    "var data = new FormData(form);"
-    " $.ajax({"
-    "url: '/update',"
-    "type: 'POST',"
-    "data: data,"
-    "contentType: false,"
-    "processData:false,"
-    "xhr: function() {"
-    "var xhr = new window.XMLHttpRequest();"
-    "xhr.upload.addEventListener('progress', function(evt) {"
-    "if (evt.lengthComputable) {"
-    "var per = evt.loaded / evt.total;"
-    "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-    "}"
-    "}, false);"
-    "return xhr;"
-    "},"
-    "success:function(d, s) {"
-    "console.log('success!')" 
-  "},"
-  "error: function (a, b, c) {"
-  "}"
-  "});"
-  "});"
-"</script>";
+bool matrixPreviewEnabled = true;
+unsigned long lastMatrixStateUpdate = 0;
+const unsigned long MATRIX_UPDATE_INTERVAL = 100;
+
  
 // Multithreding
 #if CONFIG_FREERTOS_UNICORE
@@ -270,6 +237,96 @@ const char* serverIndex =
 
 void handleWiFiConnection(void *pvParameters);
 TaskHandle_t WiFiTaskHandle;
+
+
+// ===== FIXED GREETING MANAGEMENT =====
+
+// Global variables for greeting system
+bool greetingShown = false;
+bool greetingDisplayed = false; // NEW: track if greeting was actually displayed
+unsigned long greetingStartTime = 0;
+const unsigned long greetingDuration = 60000; // Show greeting for 8 seconds
+String currentHostname = "";
+
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(handleWiFiConnection, "WiFi handler", 4096, NULL, 1, &WiFiTaskHandle, TASK_RUNNING_CORE);
+
+  pinMode(dataPin, OUTPUT);
+  pinMode(clockPinRed, OUTPUT);
+  pinMode(clockPinGreen, OUTPUT);
+  pinMode(strobePin, OUTPUT);
+  for (int i = 0; i < 8; i++) pinMode(rowPins[i], OUTPUT);
+
+  EEPROM.begin(EEPROM_SIZE);
+  loadSettings();
+}
+
+void setPixel(uint8_t x, uint8_t y, uint8_t color) {
+  if (x >= 32 || y >= 8) return;
+  redBuffer[y][x] = (color & 1);
+  greenBuffer[y][x] = (color & 2) >> 1;
+}
+
+void drawClockDigits(int hour, int minute, int second) {
+  memset(redBuffer, 0, sizeof(redBuffer));
+  memset(greenBuffer, 0, sizeof(greenBuffer));
+  drawChar(0 + startPos, 0, '0' + hour / 10, hour_color);
+  drawChar(5 + startPos, 0, '0' + hour % 10, hour_color);
+
+  if (colonVisible) drawChar(9 + startPos, 0, ':', colon_color);
+  drawChar(10 + startPos, 0, '0' + minute / 10, minute_color);
+  drawChar(15 + startPos, 0, '0' + minute % 10, minute_color);
+
+  if (colonVisible) drawChar(19 + startPos, 0, ':', colon_color);
+  drawChar(20 + startPos, 0, '0' + second / 10, seconds_color);
+  drawChar(25 + startPos, 0, '0' + second % 10, seconds_color);
+}
+
+void sendPattern(uint32_t redPattern, uint32_t greenPattern) {
+  for (int i = 31; i >= 0; i--) {
+    digitalWrite(dataPin, (redPattern >> i) & 1);
+    digitalWrite(clockPinRed, HIGH); digitalWrite(clockPinRed, LOW);
+  }
+  for (int i = 31; i >= 0; i--) {
+    digitalWrite(dataPin, (greenPattern >> i) & 1);
+    digitalWrite(clockPinGreen, HIGH); digitalWrite(clockPinGreen, LOW);
+  }
+  digitalWrite(strobePin, HIGH); delayMicroseconds(2); digitalWrite(strobePin, LOW);
+}
+
+void activateRow(int row) { digitalWrite(rowPins[row], HIGH); }
+void deactivateRow(int row) { digitalWrite(rowPins[row], LOW); }
+void activateAllRows() { for (int i = 0; i < 8; i++) digitalWrite(rowPins[i], HIGH); }
+void deactivateAllRows() { for (int i = 0; i < 8; i++) digitalWrite(rowPins[i], LOW); }
+
+void updateRows() {
+  // Add complete blanking at start
+  deactivateAllRows();
+  sendPattern(0, 0);  // Clear shift registers
+  delayMicroseconds(75);  // Longer blanking period
+  
+  for (int row = 0; row < 8; row++) {
+    uint32_t redPattern = 0, greenPattern = 0;
+    for (int col = 0; col < 32; col++) {
+      if (redBuffer[row][col]) redPattern |= (1UL << (31 - col));
+      if (greenBuffer[row][col]) greenPattern |= (1UL << (31 - col));
+    }
+    
+    // Send data while all rows are off
+    sendPattern(redPattern, greenPattern);
+    delayMicroseconds(10);  // Let data settle
+    
+    // Activate row
+    activateRow(row);
+    delayMicroseconds(ROW_ACTIVE_TIME_US);
+    
+    // Deactivate with delay
+    deactivateRow(row);
+    delayMicroseconds(30);  // Ensure row is fully off
+  }
+}
 
 // Improved drawChar function with boundary checking
 void drawChar(uint8_t x, uint8_t y, char c, uint8_t color) {
@@ -291,8 +348,6 @@ void drawChar(uint8_t x, uint8_t y, char c, uint8_t color) {
     }
   }
 }
-
-// index 59 for lowercase
 
 // NEW: Improved drawText with optional clear and scroll support
 void drawText(int16_t x, uint8_t y, const char* str, uint8_t color, bool clearBuffer = true) {
@@ -324,85 +379,76 @@ int16_t getTextWidth(const char* str) {
 
 // NEW: Scrolling text function with better control
 class TextScroller {
-private:
-  char text[256];
-  int16_t position;
-  int16_t textWidth;
-  uint8_t yPos;
-  uint8_t textColor;
-  unsigned long lastUpdate;
-  unsigned long scrollSpeed;
-  bool isActive;
-  
-public:
-  TextScroller() : position(32), textWidth(0), yPos(0), textColor(1), 
-                   lastUpdate(0), scrollSpeed(100), isActive(false) {
-    text[0] = '\0';
-  }
-  
-  void setText(const char* newText, uint8_t y = 0, uint8_t color = 1, unsigned long speed = 100) {
-    strncpy(text, newText, sizeof(text) - 1);
-    text[sizeof(text) - 1] = '\0';
+  private:
+    char text[256];
+    int16_t position;
+    int16_t textWidth;
+    uint8_t yPos;
+    uint8_t textColor;
+    unsigned long lastUpdate;
+    unsigned long scrollSpeed;
+    bool isActive;
     
-    textWidth = getTextWidth(text);
-    yPos = y;
-    textColor = color;
-    scrollSpeed = speed;
-    position = 32; // Start from right edge
-    isActive = true;
-    lastUpdate = millis();
-  }
-  
-  void stop() {
-    isActive = false;
-  }
-  
-  bool update() {
-    if (!isActive) return false;
-    
-    unsigned long currentTime = millis();
-    if (currentTime - lastUpdate < scrollSpeed) {
-      return true; // Still active, but no update needed yet
+  public:
+    TextScroller() : position(32), textWidth(0), yPos(0), textColor(1), 
+                    lastUpdate(0), scrollSpeed(100), isActive(false) {
+      text[0] = '\0';
     }
     
-    lastUpdate = currentTime;
-    position--;
-    
-    // Reset when text has completely scrolled off the left
-    if (position < -textWidth) {
-      position = 32;
+    void setText(const char* newText, uint8_t y = 0, uint8_t color = 1, unsigned long speed = 100) {
+      strncpy(text, newText, sizeof(text) - 1);
+      text[sizeof(text) - 1] = '\0';
+      
+      textWidth = getTextWidth(text);
+      yPos = y;
+      textColor = color;
+      scrollSpeed = speed;
+      position = 32; // Start from right edge
+      isActive = true;
+      lastUpdate = millis();
     }
     
-    // Draw the text at current position
-    drawText(position, yPos, text, textColor, true);
+    void stop() {
+      isActive = false;
+    }
     
-    return true;
-  }
-  
-  bool isScrolling() const {
-    return isActive;
-  }
-  
-  void setSpeed(unsigned long speed) {
-    scrollSpeed = speed;
-  }
-  
-  int16_t getPosition() const {
-    return position;
-  }
+    bool update() {
+      if (!isActive) return false;
+      
+      unsigned long currentTime = millis();
+      if (currentTime - lastUpdate < scrollSpeed) {
+        return true; // Still active, but no update needed yet
+      }
+      
+      lastUpdate = currentTime;
+      position--;
+      
+      // Reset when text has completely scrolled off the left
+      if (position < -textWidth) {
+        position = 32;
+      }
+      
+      // Draw the text at current position
+      drawText(position, yPos, text, textColor, true);
+      
+      return true;
+    }
+    
+    bool isScrolling() const {
+      return isActive;
+    }
+    
+    void setSpeed(unsigned long speed) {
+      scrollSpeed = speed;
+    }
+    
+    int16_t getPosition() const {
+      return position;
+    }
 };
 
 // Global scroller instance
 TextScroller textScroller;
-
-// ===== FIXED GREETING MANAGEMENT =====
-
-// Global variables for greeting system
-bool greetingShown = false;
-bool greetingDisplayed = false; // NEW: track if greeting was actually displayed
-unsigned long greetingStartTime = 0;
-const unsigned long greetingDuration = 60000; // Show greeting for 8 seconds
-String currentHostname = "";
 
 void setupHostname() {
   // Check if hostname is already set, if not set it to matrixclock.local
@@ -436,18 +482,358 @@ void showGreetingMessage() {
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  xTaskCreatePinnedToCore(handleWiFiConnection, "WiFi handler", 4096, NULL, 1, &WiFiTaskHandle, TASK_RUNNING_CORE);
+void handleSerial() {
+  static String input = "";
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      input.trim();
+      if (input.startsWith("TIME ")) {
+        int h = input.substring(5, 7).toInt();
+        int m = input.substring(8, 10).toInt();
+        int s = input.substring(11, 13).toInt();
+        if (h >= 0 && h < 24 && m >= 0 && m < 60 && s >= 0 && s < 60) {
+          fakeHour = h; fakeMinute = m; fakeSecond = s;
+          textScroller.stop(); // Stop scrolling when setting time
+          testMode = false;
+        }
+      } else if (input.startsWith("SCROLL ")) {
+        // NEW: SCROLL command with optional parameters
+        // Usage: SCROLL Hello World [speed] [color] [y]
+        String text = input.substring(7);
+        int spacePos1 = text.lastIndexOf(' ');
+        int spacePos2 = text.lastIndexOf(' ', spacePos1 - 1);
+        int spacePos3 = text.lastIndexOf(' ', spacePos2 - 1);
+        
+        unsigned long speed = 100;  // Default speed
+        uint8_t color = 1;          // Default color (red)
+        uint8_t y = 0;              // Default y position
+        
+        // Parse optional parameters from the end
+        if (spacePos1 > 0 && text.substring(spacePos1 + 1).toInt() > 0) {
+          y = text.substring(spacePos1 + 1).toInt();
+          text = text.substring(0, spacePos1);
+          
+          if (spacePos2 > 0 && text.substring(spacePos2 + 1).toInt() > 0) {
+            color = text.substring(spacePos2 + 1).toInt();
+            text = text.substring(0, spacePos2);
+            
+            if (spacePos3 > 0 && text.substring(spacePos3 + 1).toInt() > 0) {
+              speed = text.substring(spacePos3 + 1).toInt();
+              text = text.substring(0, spacePos3);
+            }
+          }
+        }
+        
+        textScroller.setText(text.c_str(), y, color, speed);
+        testMode = false;
+        Serial.println("Scrolling: " + text + " (speed=" + speed + ", color=" + color + ", y=" + y + ")");
+        
+      } else if (input.startsWith("TEXT ")) {
+        // Keep existing TEXT command for compatibility
+        strncpy(testMessage, input.substring(5).c_str(), sizeof(testMessage) - 1);
+        textScroller.stop();
+        testMode = true;
+        
+      } else if (input.equals("GREETING")) {
+        // NEW: Show greeting message manually
+        if (WiFi.isConnected()) {
+          String greetingText = "Matrix Clock Ready! IP: " + WiFi.localIP().toString() + " Host: " + currentHostname;
+          textScroller.setText(greetingText.c_str(), 0, 2, 120);
+          Serial.println("Manual greeting: " + greetingText);
+        } else {
+          textScroller.setText("Matrix Clock - WiFi Connecting...", 0, 1, 120);
+          Serial.println("Manual greeting: WiFi not connected");
+        }
+        greetingShown = true;
+        greetingStartTime = millis();
+        
+      } else if (input.equals("HOSTNAME")) {
+        // NEW: Show current hostname info
+        Serial.println("=== HOSTNAME INFO ===");
+        Serial.println("Current hostname: " + currentHostname);
+        Serial.println("WiFi hostname: " + String(WiFi.getHostname()));
+        if (WiFi.isConnected()) {
+          Serial.println("IP address: " + WiFi.localIP().toString());
+          Serial.println("Access via: http://" + currentHostname);
+          Serial.println("Access via: http://" + WiFi.localIP().toString());
+        }
+        Serial.println("====================");
+        
+      } else if (input.startsWith("SETHOSTNAME ")) {
+        // NEW: Set custom hostname
+        String newHostname = input.substring(12);
+        newHostname.trim();
+        if (newHostname.length() > 0) {
+          if (WiFi.setHostname(newHostname.c_str())) {
+            currentHostname = newHostname + ".local";
+            Serial.println("Hostname changed to: " + currentHostname);
+            // Show confirmation message
+            textScroller.setText(("Hostname: " + currentHostname).c_str(), 0, 3, 120);
+          } else {
+            Serial.println("Failed to set hostname to: " + newHostname);
+          }
+        }
+        
+      } else if (input.equals("SYNC")) {
+        // [Keep your existing SYNC command code]
+      } else if (input.startsWith("LATENCY ")) {
+        // [Keep your existing LATENCY command code]
+      } else if (input.equals("STATUS")) {
+        // [Keep your existing STATUS command code, but add scroll status]
+        Serial.println("=== NTP SYNC STATUS ===");
+        // ... existing status code ...
+        Serial.println("Scroll active: " + String(textScroller.isScrolling() ? "YES" : "NO"));
+        if (textScroller.isScrolling()) {
+          Serial.println("Scroll position: " + String(textScroller.getPosition()));
+        }
+        Serial.println("Greeting shown: " + String(greetingShown ? "YES" : "NO"));
+        Serial.println("Current hostname: " + currentHostname);
+        if (WiFi.isConnected()) {
+          Serial.println("IP address: " + WiFi.localIP().toString());
+        }
+        Serial.println("======================");
+      }
+      Serial.println("Serial: " + input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+}
 
-  pinMode(dataPin, OUTPUT);
-  pinMode(clockPinRed, OUTPUT);
-  pinMode(clockPinGreen, OUTPUT);
-  pinMode(strobePin, OUTPUT);
-  for (int i = 0; i < 8; i++) pinMode(rowPins[i], OUTPUT);
+// NTP validation function
+bool validateNTPTime() {
+  int hour = timeClient.getHours();
+  int minute = timeClient.getMinutes();
+  int second = timeClient.getSeconds();
+  
+  // Basic sanity checks
+  if (hour < 0 || hour > 23) return false;
+  if (minute < 0 || minute > 59) return false;
+  if (second < 0 || second > 59) return false;
+  
+  // Check if time seems reasonable
+  unsigned long epochTime = timeClient.getEpochTime();
+  if (epochTime < 1640995200) return false;
+  
+  // If we have previous time, check for reasonable progression
+  if (timeInitialized && ntpSyncAttempts == 0) { // Only validate on first attempt
+    int prevTotalSeconds = lastSyncedHour * 3600 + lastSyncedMinute * 60 + lastSyncedSecond;
+    int currentTotalSeconds = hour * 3600 + minute * 60 + second;
+    
+    // Use actual time since last successful sync
+    unsigned long timeSinceLastSync = (millis() - lastSecondMillis) / 1000; // Use lastSecondMillis instead
+    int expectedSeconds = (prevTotalSeconds + timeSinceLastSync) % (24 * 3600);
+    
+    // Allow larger tolerance for time jumps (30 seconds instead of 10)
+    int timeDiff = abs(currentTotalSeconds - expectedSeconds);
+    if (timeDiff > 30 && timeDiff < (24 * 3600 - 30)) {
+      Serial.println("NTP validation failed: time jump detected. Expected ~" + String(expectedSeconds) + "s, got " + String(currentTotalSeconds) + "s");
+      return false;
+    }
+  }
+  
+  return true;
+}
 
-  EEPROM.begin(EEPROM_SIZE);
-  loadSettings();
+void handleWiFiConnection(void *pvParameters) {
+  (void)pvParameters;
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid, password);
+
+  while (true) {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("[WiFi] Connected. IP: " + WiFi.localIP().toString());
+      vTaskDelete(NULL);
+    }
+    delay(500);
+  }
+}
+
+void sendSocketMessage(const char* type, const String& message) {
+  DynamicJsonDocument doc(1024);
+
+  JsonArray array = doc.to<JsonArray>();
+  array.add("message");  // Event name
+  JsonObject data = array.createNestedObject();
+  data["status"] = "success";
+  data["type"] = type;
+  data["message"] = message;
+
+  String output;
+  serializeJson(doc, output);
+  socketIO.sendEVENT(output);
+}
+
+void sendSettingsDebug() {
+  StaticJsonDocument<512> doc;
+
+  doc["hour"] = lastSyncedHour;
+  doc["minute"] = lastSyncedMinute;
+  doc["second"] = lastSyncedSecond;
+
+  doc["fakehour"] = fakeHour;
+  doc["fakeminute"] = fakeMinute;
+  doc["fakesecond"] = fakeSecond;
+
+  doc["hour_color"] = hour_color;
+  doc["minute_color"] = minute_color;
+  doc["seconds_color"] = seconds_color;
+
+  doc["colon_mode"] = colon_mode;
+  doc["colon_color"] = colon_color;
+
+  doc["ssid"] = ssid;
+  doc["password"] = password;
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  sendSocketMessage("debug", jsonString);
+}
+
+void sendMatrixStateWS() {
+    if (!WiFi.isConnected()) return;
+
+    DynamicJsonDocument doc(2048);
+    doc["type"] = "matrix_update";
+
+    JsonArray matrix = doc.createNestedArray("data");
+    for (int y = 0; y < 8; y++) {
+        JsonArray row = matrix.createNestedArray();
+        for (int x = 0; x < 32; x++) {
+            bool isLit = (redBuffer[y][x] || greenBuffer[y][x]);
+            row.add(isLit);
+        }
+    }
+
+    String output;
+    serializeJson(doc, output);
+    socketIO.sendEVENT(output);
+}
+
+void socketIOEvent(const socketIOmessageType_t& type, uint8_t * payload, const size_t& length) {
+  switch (type)  {
+    case sIOtype_DISCONNECT:
+      Serial.println("[IOc] Disconnected");
+      break;
+
+    case sIOtype_CONNECT:
+      Serial.print("[IOc] Connected to url: ");
+      Serial.println((char*) payload);
+      // join default namespace (no auto join in Socket.IO V3)
+      socketIO.send(sIOtype_CONNECT, "/");
+
+      sendSettingsDebug();
+      break;
+
+    case sIOtype_EVENT:
+      Serial.print("[Socket.IO] Event: ");
+      Serial.println((char*) payload);
+    break;
+
+    case sIOtype_BINARY_EVENT: 
+      Serial.printf("[Socket.IO] Binary data received: %d bytes\n", length);
+    break;
+
+    case sIOtype_ACK:
+      Serial.print("[IOc] Get ack: ");
+      Serial.println(length);
+      //hexdump(payload, length);
+      break;
+
+    case sIOtype_ERROR:
+      Serial.print("[IOc] Get error: ");
+      Serial.println(length);
+      //hexdump(payload, length);
+      break;
+
+    case sIOtype_BINARY_ACK:
+      Serial.print("[IOc] Get binary ack: ");
+      Serial.println(length);
+      //hexdump(payload, length);
+      break;
+
+    default:
+      break;
+  }
+}
+
+void handleOTA() {
+      server.on("/", HTTP_GET, []() {
+        server.sendHeader("Connection", "close");
+        server.send(404, "text/html", "POU PAS FILE ??");
+      });
+
+      server.on("/serverIndex", HTTP_GET, []() {
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/html", serverIndex);
+      });
+
+        server.on("/matrix-state", HTTP_GET, []() {
+            DynamicJsonDocument doc(2048);
+            JsonArray array = doc.createNestedArray();
+
+            // Convert the LED matrix buffers to JSON
+            for (int y = 0; y < 8; y++) {
+                JsonArray row = array.createNestedArray();
+                for (int x = 0; x < 32; x++) {
+                    JsonObject pixel = row.createNestedObject();
+                    pixel["red"] = redBuffer[y][x] == 1;
+                    pixel["green"] = greenBuffer[y][x] == 1;
+                }
+            }
+
+            String response;
+            serializeJson(doc, response);
+            server.send(200, "application/json", response);
+        });
+
+        // Add WiFi status endpoint
+        server.on("/status", HTTP_GET, []() {
+            DynamicJsonDocument doc(256);
+            doc["internet"] = WiFi.isConnected();
+            doc["ip"] = WiFi.localIP().toString();
+            doc["rssi"] = WiFi.RSSI();
+            doc["hostname"] = WiFi.getHostname();
+
+            String response;
+            serializeJson(doc, response);
+            server.send(200, "application/json", response);
+        });
+
+  /*handling uploading firmware file */
+  server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      sendSocketMessage("debug", "Update: " + String(upload.filename.c_str()) + "\n");
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      /* flashing firmware to ESP*/
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { //true to set the size to the current progress
+        sendSocketMessage("debug", "Update Success: " + String(upload.totalSize) + "\nRebooting...\n");
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
+
+  server.begin();
+
+  Serial.println("Web Server Started!");
 }
 
 void loop() {
@@ -666,376 +1052,6 @@ void loop() {
       }
     }
   }
-  
+
   updateRows();
-}
-
-void updateRows() {
-  // Add complete blanking at start
-  deactivateAllRows();
-  sendPattern(0, 0);  // Clear shift registers
-  delayMicroseconds(75);  // Longer blanking period
-  
-  for (int row = 0; row < 8; row++) {
-    uint32_t redPattern = 0, greenPattern = 0;
-    for (int col = 0; col < 32; col++) {
-      if (redBuffer[row][col]) redPattern |= (1UL << (31 - col));
-      if (greenBuffer[row][col]) greenPattern |= (1UL << (31 - col));
-    }
-    
-    // Send data while all rows are off
-    sendPattern(redPattern, greenPattern);
-    delayMicroseconds(10);  // Let data settle
-    
-    // Activate row
-    activateRow(row);
-    delayMicroseconds(ROW_ACTIVE_TIME_US);
-    
-    // Deactivate with delay
-    deactivateRow(row);
-    delayMicroseconds(30);  // Ensure row is fully off
-  }
-}
-
-
-void handleSerial() {
-  static String input = "";
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      input.trim();
-      if (input.startsWith("TIME ")) {
-        int h = input.substring(5, 7).toInt();
-        int m = input.substring(8, 10).toInt();
-        int s = input.substring(11, 13).toInt();
-        if (h >= 0 && h < 24 && m >= 0 && m < 60 && s >= 0 && s < 60) {
-          fakeHour = h; fakeMinute = m; fakeSecond = s;
-          textScroller.stop(); // Stop scrolling when setting time
-          testMode = false;
-        }
-      } else if (input.startsWith("SCROLL ")) {
-        // NEW: SCROLL command with optional parameters
-        // Usage: SCROLL Hello World [speed] [color] [y]
-        String text = input.substring(7);
-        int spacePos1 = text.lastIndexOf(' ');
-        int spacePos2 = text.lastIndexOf(' ', spacePos1 - 1);
-        int spacePos3 = text.lastIndexOf(' ', spacePos2 - 1);
-        
-        unsigned long speed = 100;  // Default speed
-        uint8_t color = 1;          // Default color (red)
-        uint8_t y = 0;              // Default y position
-        
-        // Parse optional parameters from the end
-        if (spacePos1 > 0 && text.substring(spacePos1 + 1).toInt() > 0) {
-          y = text.substring(spacePos1 + 1).toInt();
-          text = text.substring(0, spacePos1);
-          
-          if (spacePos2 > 0 && text.substring(spacePos2 + 1).toInt() > 0) {
-            color = text.substring(spacePos2 + 1).toInt();
-            text = text.substring(0, spacePos2);
-            
-            if (spacePos3 > 0 && text.substring(spacePos3 + 1).toInt() > 0) {
-              speed = text.substring(spacePos3 + 1).toInt();
-              text = text.substring(0, spacePos3);
-            }
-          }
-        }
-        
-        textScroller.setText(text.c_str(), y, color, speed);
-        testMode = false;
-        Serial.println("Scrolling: " + text + " (speed=" + speed + ", color=" + color + ", y=" + y + ")");
-        
-      } else if (input.startsWith("TEXT ")) {
-        // Keep existing TEXT command for compatibility
-        strncpy(testMessage, input.substring(5).c_str(), sizeof(testMessage) - 1);
-        textScroller.stop();
-        testMode = true;
-        
-      } else if (input.equals("GREETING")) {
-        // NEW: Show greeting message manually
-        if (WiFi.isConnected()) {
-          String greetingText = "Matrix Clock Ready! IP: " + WiFi.localIP().toString() + " Host: " + currentHostname;
-          textScroller.setText(greetingText.c_str(), 0, 2, 120);
-          Serial.println("Manual greeting: " + greetingText);
-        } else {
-          textScroller.setText("Matrix Clock - WiFi Connecting...", 0, 1, 120);
-          Serial.println("Manual greeting: WiFi not connected");
-        }
-        greetingShown = true;
-        greetingStartTime = millis();
-        
-      } else if (input.equals("HOSTNAME")) {
-        // NEW: Show current hostname info
-        Serial.println("=== HOSTNAME INFO ===");
-        Serial.println("Current hostname: " + currentHostname);
-        Serial.println("WiFi hostname: " + String(WiFi.getHostname()));
-        if (WiFi.isConnected()) {
-          Serial.println("IP address: " + WiFi.localIP().toString());
-          Serial.println("Access via: http://" + currentHostname);
-          Serial.println("Access via: http://" + WiFi.localIP().toString());
-        }
-        Serial.println("====================");
-        
-      } else if (input.startsWith("SETHOSTNAME ")) {
-        // NEW: Set custom hostname
-        String newHostname = input.substring(12);
-        newHostname.trim();
-        if (newHostname.length() > 0) {
-          if (WiFi.setHostname(newHostname.c_str())) {
-            currentHostname = newHostname + ".local";
-            Serial.println("Hostname changed to: " + currentHostname);
-            // Show confirmation message
-            textScroller.setText(("Hostname: " + currentHostname).c_str(), 0, 3, 120);
-          } else {
-            Serial.println("Failed to set hostname to: " + newHostname);
-          }
-        }
-        
-      } else if (input.equals("SYNC")) {
-        // [Keep your existing SYNC command code]
-      } else if (input.startsWith("LATENCY ")) {
-        // [Keep your existing LATENCY command code]
-      } else if (input.equals("STATUS")) {
-        // [Keep your existing STATUS command code, but add scroll status]
-        Serial.println("=== NTP SYNC STATUS ===");
-        // ... existing status code ...
-        Serial.println("Scroll active: " + String(textScroller.isScrolling() ? "YES" : "NO"));
-        if (textScroller.isScrolling()) {
-          Serial.println("Scroll position: " + String(textScroller.getPosition()));
-        }
-        Serial.println("Greeting shown: " + String(greetingShown ? "YES" : "NO"));
-        Serial.println("Current hostname: " + currentHostname);
-        if (WiFi.isConnected()) {
-          Serial.println("IP address: " + WiFi.localIP().toString());
-        }
-        Serial.println("======================");
-      }
-      Serial.println("Serial: " + input);
-      input = "";
-    } else {
-      input += c;
-    }
-  }
-}
-
-void setPixel(uint8_t x, uint8_t y, uint8_t color) {
-  if (x >= 32 || y >= 8) return;
-  redBuffer[y][x] = (color & 1);
-  greenBuffer[y][x] = (color & 2) >> 1;
-}
-
-void drawClockDigits(int hour, int minute, int second) {
-  memset(redBuffer, 0, sizeof(redBuffer));
-  memset(greenBuffer, 0, sizeof(greenBuffer));
-  drawChar(0 + startPos, 0, '0' + hour / 10, hour_color);
-  drawChar(5 + startPos, 0, '0' + hour % 10, hour_color);
-
-  if (colonVisible) drawChar(9 + startPos, 0, ':', colon_color);
-  drawChar(10 + startPos, 0, '0' + minute / 10, minute_color);
-  drawChar(15 + startPos, 0, '0' + minute % 10, minute_color);
-
-  if (colonVisible) drawChar(19 + startPos, 0, ':', colon_color);
-  drawChar(20 + startPos, 0, '0' + second / 10, seconds_color);
-  drawChar(25 + startPos, 0, '0' + second % 10, seconds_color);
-}
-
-void sendPattern(uint32_t redPattern, uint32_t greenPattern) {
-  for (int i = 31; i >= 0; i--) {
-    digitalWrite(dataPin, (redPattern >> i) & 1);
-    digitalWrite(clockPinRed, HIGH); digitalWrite(clockPinRed, LOW);
-  }
-  for (int i = 31; i >= 0; i--) {
-    digitalWrite(dataPin, (greenPattern >> i) & 1);
-    digitalWrite(clockPinGreen, HIGH); digitalWrite(clockPinGreen, LOW);
-  }
-  digitalWrite(strobePin, HIGH); delayMicroseconds(2); digitalWrite(strobePin, LOW);
-}
-
-void activateRow(int row) { digitalWrite(rowPins[row], HIGH); }
-void deactivateRow(int row) { digitalWrite(rowPins[row], LOW); }
-void activateAllRows() { for (int i = 0; i < 8; i++) digitalWrite(rowPins[i], HIGH); }
-void deactivateAllRows() { for (int i = 0; i < 8; i++) digitalWrite(rowPins[i], LOW); }
-
-// NTP validation function
-bool validateNTPTime() {
-  int hour = timeClient.getHours();
-  int minute = timeClient.getMinutes();
-  int second = timeClient.getSeconds();
-  
-  // Basic sanity checks
-  if (hour < 0 || hour > 23) return false;
-  if (minute < 0 || minute > 59) return false;
-  if (second < 0 || second > 59) return false;
-  
-  // Check if time seems reasonable
-  unsigned long epochTime = timeClient.getEpochTime();
-  if (epochTime < 1640995200) return false;
-  
-  // If we have previous time, check for reasonable progression
-  if (timeInitialized && ntpSyncAttempts == 0) { // Only validate on first attempt
-    int prevTotalSeconds = lastSyncedHour * 3600 + lastSyncedMinute * 60 + lastSyncedSecond;
-    int currentTotalSeconds = hour * 3600 + minute * 60 + second;
-    
-    // Use actual time since last successful sync
-    unsigned long timeSinceLastSync = (millis() - lastSecondMillis) / 1000; // Use lastSecondMillis instead
-    int expectedSeconds = (prevTotalSeconds + timeSinceLastSync) % (24 * 3600);
-    
-    // Allow larger tolerance for time jumps (30 seconds instead of 10)
-    int timeDiff = abs(currentTotalSeconds - expectedSeconds);
-    if (timeDiff > 30 && timeDiff < (24 * 3600 - 30)) {
-      Serial.println("NTP validation failed: time jump detected. Expected ~" + String(expectedSeconds) + "s, got " + String(currentTotalSeconds) + "s");
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-
-void handleWiFiConnection(void *pvParameters) {
-  (void)pvParameters;
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  WiFi.begin(ssid, password);
-
-  while (true) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("[WiFi] Connected. IP: " + WiFi.localIP().toString());
-      vTaskDelete(NULL);
-    }
-    delay(500);
-  }
-}
-
-void handleOTA() {
-  server.on("/", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    server.send(404, "text/html", "POU PAS FILE ??");
-  });
-
-  server.on("/serverIndex", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/html", serverIndex);
-  });
-
-  /*handling uploading firmware file */
-  server.on("/update", HTTP_POST, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-    ESP.restart();
-  }, []() {
-    HTTPUpload& upload = server.upload();
-    if (upload.status == UPLOAD_FILE_START) {
-      sendSocketMessage("debug", "Update: " + String(upload.filename.c_str()) + "\n");
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
-        Update.printError(Serial);
-      }
-    } else if (upload.status == UPLOAD_FILE_WRITE) {
-      /* flashing firmware to ESP*/
-      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-        Update.printError(Serial);
-      }
-    } else if (upload.status == UPLOAD_FILE_END) {
-      if (Update.end(true)) { //true to set the size to the current progress
-        sendSocketMessage("debug", "Update Success: " + String(upload.totalSize) + "\nRebooting...\n");
-      } else {
-        Update.printError(Serial);
-      }
-    }
-  });
-
-  server.begin();
-
-  Serial.println("Web Server Started!");
-}
-
-void sendSocketMessage(const char* type, const String& message) {
-  DynamicJsonDocument doc(1024);
-
-  JsonArray array = doc.to<JsonArray>();
-  array.add("message");  // Event name
-  JsonObject data = array.createNestedObject();
-  data["status"] = "success";
-  data["type"] = type;
-  data["message"] = message;
-
-  String output;
-  serializeJson(doc, output);
-  socketIO.sendEVENT(output);
-}
-
-void sendSettingsDebug() {
-  StaticJsonDocument<512> doc;
-
-  doc["hour"] = lastSyncedHour;
-  doc["minute"] = lastSyncedMinute;
-  doc["second"] = lastSyncedSecond;
-
-  doc["fakehour"] = fakeHour;
-  doc["fakeminute"] = fakeMinute;
-  doc["fakesecond"] = fakeSecond;
-
-  doc["hour_color"] = hour_color;
-  doc["minute_color"] = minute_color;
-  doc["seconds_color"] = seconds_color;
-
-  doc["colon_mode"] = colon_mode;
-  doc["colon_color"] = colon_color;
-
-  doc["ssid"] = ssid;
-  doc["password"] = password;
-
-  String jsonString;
-  serializeJson(doc, jsonString);
-
-  sendSocketMessage("debug", jsonString);
-}
-
-void socketIOEvent(const socketIOmessageType_t& type, uint8_t * payload, const size_t& length) {
-  switch (type)  {
-    case sIOtype_DISCONNECT:
-      Serial.println("[IOc] Disconnected");
-      break;
-
-    case sIOtype_CONNECT:
-      Serial.print("[IOc] Connected to url: ");
-      Serial.println((char*) payload);
-      // join default namespace (no auto join in Socket.IO V3)
-      socketIO.send(sIOtype_CONNECT, "/");
-
-      sendSettingsDebug();
-      break;
-
-    case sIOtype_EVENT:
-      Serial.print("[Socket.IO] Event: ");
-      Serial.println((char*) payload);
-
-    break;
-
-    case sIOtype_BINARY_EVENT: 
-      Serial.printf("[Socket.IO] Binary data received: %d bytes\n", length);
-    break;
-
-    case sIOtype_ACK:
-      Serial.print("[IOc] Get ack: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
-
-    case sIOtype_ERROR:
-      Serial.print("[IOc] Get error: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
-
-    case sIOtype_BINARY_ACK:
-      Serial.print("[IOc] Get binary ack: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
-
-    default:
-      break;
-  }
 }
