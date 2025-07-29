@@ -1,0 +1,8 @@
+/node_modules
+/dist
+.env
+
+.vscode
+.idea
+/backend
+LED_clock_esp32.zip

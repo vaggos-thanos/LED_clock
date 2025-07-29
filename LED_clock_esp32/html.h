@@ -176,7 +176,6 @@ const char serverIndex[] PROGMEM =R"rawliteral(
                     { name: 'main.cpp', url: 'https://raw.githubusercontent.com/vaggos-thanos/LED_clock/main/LED_clock_esp32/LED_clock_esp32.ino' },
                     { name: 'font5x7.h', url: 'https://raw.githubusercontent.com/vaggos-thanos/LED_clock/main/LED_clock_esp32/font5x7.h' },
                     { name: 'html.h', url: 'https://raw.githubusercontent.com/vaggos-thanos/LED_clock/main/LED_clock_esp32/html.h' },
-
                 ];
 
                 // Update the main content div in your HTML
@@ -824,7 +823,18 @@ const char serverIndex[] PROGMEM =R"rawliteral(
                 $('#liveToggle').on('click', function() {
                     isLive = !isLive;
                     $(this).toggleClass('live-active');
-
+                    if (previewLoop) {
+                        console.log('Stopping preview loop');
+                        previewLoop = false;
+                        if (previewInterval) {
+                            clearInterval(previewInterval);
+                            previewInterval = null;
+                            clearDisplay();
+                        }
+                        $('#previewSwitch').prop('checked', false);
+                        $('#shortTimeSwitch').prop('checked', false);
+                    }
+                   
                     if (isLive) {
                         liveInterval = setInterval(updateMatrixDisplay, parseInt($('#refreshRate').val()));
                     } else {
@@ -910,12 +920,20 @@ const char serverIndex[] PROGMEM =R"rawliteral(
                                 blinkingColon = !blinkingColon;
                             }
                         }, 1000);
+
+                        if (isLive) {
+                            console.log('Stopping live preview');
+                            isLive = false;
+                            $('#liveToggle').removeClass('live-active');
+                            clearInterval(liveInterval);
+                            clearDisplay();
+                        }
                     } else {
                         previewLoop = false;
                         if (previewInterval) {
                             clearInterval(previewInterval);
                             previewInterval = null;
-                        }
+                        }                        
                         clearDisplay();
                     }
                 });
@@ -999,5 +1017,6 @@ const char serverIndex[] PROGMEM =R"rawliteral(
     </script>
     </body>
     </html>
+
 
 )rawliteral";
