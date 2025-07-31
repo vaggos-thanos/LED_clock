@@ -20,9 +20,9 @@
 #include "html.h"
 
 // WS
-#include <WebSocketsClient_Generic.h>
-#include <SocketIOclient_Generic.h>
-#define _WEBSOCKETS_LOGLEVEL_     4
+// #include <WebSocketsClient_Generic.h>
+// #include <SocketIOclient_Generic.h>
+// #define _WEBSOCKETS_LOGLEVEL_     4
 
 // Custom display chars
 #include "font5x7.h"
@@ -66,9 +66,9 @@ const char* password = "HpM#v#vpbQ@8f*";
 #define MAX_PASS_LEN 64
 
 // SOCKET IO
-IPAddress serverIP(192, 168, 101, 2); //Enter server adress
-uint16_t serverPort = 3000; // Enter server port
-SocketIOclient  socketIO;
+// IPAddress serverIP(192, 168, 101, 2); //Enter server adress
+// uint16_t serverPort = 3000; // Enter server port
+// SocketIOclient  socketIO;
 
 // NTP - Modified for better timing
 const char* ntpServer = "gr.pool.ntp.org";
@@ -284,7 +284,7 @@ void drawClockDigits(int hour, int minute, int second) {
   drawChar(25 + startPos, 0, '0' + second % 10, seconds_color);
 }
 
-void sendPattern(uint32_t redPattern, uint32_t greenPattern) {
+void sendPattern(uint32_t redPattern, uint32_t greenPattern) {  
   for (int i = 31; i >= 0; i--) {
     digitalWrite(dataPin, (redPattern >> i) & 1);
     digitalWrite(clockPinRed, HIGH); digitalWrite(clockPinRed, LOW);
@@ -665,7 +665,7 @@ void sendSocketMessage(const char* type, const String& message) {
 
   String output;
   serializeJson(doc, output);
-  socketIO.sendEVENT(output);
+  // socketIO.sendEVENT(output);
 }
 
 void sendSettingsDebug() {
@@ -712,55 +712,55 @@ void sendMatrixStateWS() {
 
     String output;
     serializeJson(doc, output);
-    socketIO.sendEVENT(output);
+    // socketIO.sendEVENT(output);
 }
 
-void socketIOEvent(const socketIOmessageType_t& type, uint8_t * payload, const size_t& length) {
-  switch (type)  {
-    case sIOtype_DISCONNECT:
-      Serial.println("[IOc] Disconnected");
-      break;
+// void socketIOEvent(const socketIOmessageType_t& type, uint8_t * payload, const size_t& length) {
+//   switch (type)  {
+//     case sIOtype_DISCONNECT:
+//       Serial.println("[IOc] Disconnected");
+//       break;
 
-    case sIOtype_CONNECT:
-      Serial.print("[IOc] Connected to url: ");
-      Serial.println((char*) payload);
-      // join default namespace (no auto join in Socket.IO V3)
-      socketIO.send(sIOtype_CONNECT, "/");
+//     case sIOtype_CONNECT:
+//       Serial.print("[IOc] Connected to url: ");
+//       Serial.println((char*) payload);
+//       // join default namespace (no auto join in Socket.IO V3)
+//       socketIO.send(sIOtype_CONNECT, "/");
 
-      sendSettingsDebug();
-      break;
+//       sendSettingsDebug();
+//       break;
 
-    case sIOtype_EVENT:
-      Serial.print("[Socket.IO] Event: ");
-      Serial.println((char*) payload);
-    break;
+//     case sIOtype_EVENT:
+//       Serial.print("[Socket.IO] Event: ");
+//       Serial.println((char*) payload);
+//     break;
 
-    case sIOtype_BINARY_EVENT: 
-      Serial.printf("[Socket.IO] Binary data received: %d bytes\n", length);
-    break;
+//     case sIOtype_BINARY_EVENT: 
+//       Serial.printf("[Socket.IO] Binary data received: %d bytes\n", length);
+//     break;
 
-    case sIOtype_ACK:
-      Serial.print("[IOc] Get ack: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
+//     case sIOtype_ACK:
+//       Serial.print("[IOc] Get ack: ");
+//       Serial.println(length);
+//       //hexdump(payload, length);
+//       break;
 
-    case sIOtype_ERROR:
-      Serial.print("[IOc] Get error: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
+//     case sIOtype_ERROR:
+//       Serial.print("[IOc] Get error: ");
+//       Serial.println(length);
+//       //hexdump(payload, length);
+//       break;
 
-    case sIOtype_BINARY_ACK:
-      Serial.print("[IOc] Get binary ack: ");
-      Serial.println(length);
-      //hexdump(payload, length);
-      break;
+//     case sIOtype_BINARY_ACK:
+//       Serial.print("[IOc] Get binary ack: ");
+//       Serial.println(length);
+//       //hexdump(payload, length);
+//       break;
 
-    default:
-      break;
-  }
-}
+//     default:
+//       break;
+//   }
+// }
 
 void handleOTA() {
       server.on("/", HTTP_GET, []() {
@@ -770,7 +770,7 @@ void handleOTA() {
 
       server.on("/serverIndex", HTTP_GET, []() {
         server.sendHeader("Connection", "close");
-        server.send(200, "text/html", serverIndex);
+        server.send_P(200, "text/html", serverIndex);
       });
 
         server.on("/matrix-state", HTTP_GET, []() {
@@ -851,13 +851,13 @@ void loop() {
     // Show greeting message when first connected
     showGreetingMessage();
 
-    socketIO.setReconnectInterval(10000);
-    socketIO.begin(serverIP, serverPort);
-    Serial.print("Socket IO connecting to: ");
-    Serial.print(serverIP);
-    Serial.print(":");
-    Serial.println(serverPort);
-    socketIO.onEvent(socketIOEvent);
+    // socketIO.setReconnectInterval(10000);
+    // socketIO.begin(serverIP, serverPort);
+    // Serial.print("Socket IO connecting to: ");
+    // Serial.print(serverIP);
+    // Serial.print(":");
+    // Serial.println(serverPort);
+    // socketIO.onEvent(socketIOEvent);
 
     textScroller.stop();
     greetingDisplayed = false;
@@ -986,7 +986,7 @@ void loop() {
     }
 
     server.handleClient();
-    socketIO.loop();
+    // socketIO.loop();
   }
 
   if(fakeMode) {
