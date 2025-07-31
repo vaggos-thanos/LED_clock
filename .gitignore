@@ -6,3 +6,6 @@
 .idea
 LED_clock_esp32.zip
 /backend_new
+/python_build_api/PortableGit
+/python_build_api/WPy64-312101
+/python_build_api/build

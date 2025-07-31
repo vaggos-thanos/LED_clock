@@ -1,0 +1,4 @@
+flask
+flask-cors
+platformio
+# Add any other libraries you need
